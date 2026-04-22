@@ -587,6 +587,8 @@ def _execute(args) -> dict:
     videos_dir = os.path.join(args.output_path, "videos")
     os.makedirs(videos_dir, exist_ok=True)
 
+    _per_image_outputs: list[dict] = []
+
     for img_idx, img_path in enumerate(image_paths):
         base_name = os.path.splitext(os.path.basename(img_path))[0]
         per_image_dir = os.path.join(args.output_path, base_name)
@@ -595,6 +597,12 @@ def _execute(args) -> dict:
         combined_video_path = os.path.join(videos_dir, f"{base_name}.mp4")
         if os.path.exists(combined_video_path):
             log.info(f"Skipping {img_path} (combined video already exists at {combined_video_path})", rank0_only=True)
+            _per_image_outputs.append({
+                "output_dir":    str(per_image_dir),
+                "video_path":    str(combined_video_path),
+                "zoom_in_path":  os.path.join(per_image_dir, "zoom_in.mp4"),
+                "zoom_out_path": os.path.join(per_image_dir, "zoom_out.mp4"),
+            })
             continue
 
         log.info(f"Processing [{img_idx}]: {img_path}", rank0_only=True)
@@ -800,6 +808,13 @@ def _execute(args) -> dict:
             torch.cuda.empty_cache()
         gc.collect()
 
+        _per_image_outputs.append({
+            "output_dir":    str(per_image_dir),
+            "video_path":    str(combined_video_path),
+            "zoom_in_path":  os.path.join(per_image_dir, "zoom_in.mp4"),
+            "zoom_out_path": os.path.join(per_image_dir, "zoom_out.mp4"),
+        })
+
     # Clean up distributed
     if args.context_parallel_size > 1:
         from megatron.core import parallel_state
@@ -812,11 +827,14 @@ def _execute(args) -> dict:
 
     log.info("Done.", rank0_only=True)
 
+    if not _per_image_outputs:
+        raise RuntimeError("lyra2_zoomgs: no images were processed (image_paths was empty or all skipped)")
+
+    # Backward-compat: top-level keys reflect the LAST output (or only output for the API single-sample case).
+    last = _per_image_outputs[-1]
     return {
-        "output_dir": str(per_image_dir),
-        "video_path": str(combined_video_path),
-        "zoom_in_path": str(os.path.join(per_image_dir, "zoom_in.mp4")),
-        "zoom_out_path": str(os.path.join(per_image_dir, "zoom_out.mp4")),
+        **last,
+        "all_outputs": _per_image_outputs,   # full list for callers that want it
     }
 
 

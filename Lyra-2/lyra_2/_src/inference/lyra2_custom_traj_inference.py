@@ -310,12 +310,18 @@ def _execute(args) -> dict:
 
     N = int(args.num_frames)
 
+    _per_image_outputs: list[dict] = []
+
     for img_idx, img_path in enumerate(image_paths):
         base_name = os.path.splitext(os.path.basename(img_path))[0]
 
         video_path = os.path.join(args.output_path, f"{base_name}.mp4")
         if os.path.exists(video_path):
             log.info(f"Skipping {img_path} (video already exists at {video_path})", rank0_only=True)
+            _per_image_outputs.append({
+                "output_dir": str(args.output_path),
+                "video_path": str(video_path),
+            })
             continue
 
         log.info(f"Processing [{img_idx}]: {img_path}", rank0_only=True)
@@ -541,6 +547,11 @@ def _execute(args) -> dict:
             torch.cuda.empty_cache()
         gc.collect()
 
+        _per_image_outputs.append({
+            "output_dir": str(args.output_path),
+            "video_path": str(video_path),
+        })
+
     # Clean up distributed
     if args.context_parallel_size > 1:
         from megatron.core import parallel_state
@@ -553,10 +564,10 @@ def _execute(args) -> dict:
 
     log.info("Done.", rank0_only=True)
 
-    return {
-        "output_dir": str(args.output_path),
-        "video_path": str(video_path),
-    }
+    if not _per_image_outputs:
+        raise RuntimeError("lyra2_custom_traj: no images were processed (image_paths was empty or all skipped)")
+    last = _per_image_outputs[-1]
+    return {**last, "all_outputs": _per_image_outputs}
 
 
 def run_custom_traj(params: "CustomTrajParams") -> dict:
