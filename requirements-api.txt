@@ -1,0 +1,20 @@
+# =============================================================================
+# Lyra-2 API — Python dependencies
+#
+# NOT listed here (installed in Dockerfile or Lyra-2/requirements.txt):
+#   torch / torchvision    — Dockerfile (cu128 wheels)
+#   flash-attn             — Dockerfile (Blackwell needs latest, NOT 2.6.3)
+#   transformer_engine     — Dockerfile (--no-build-isolation)
+#   MoGe                   — Dockerfile (git install)
+#   vipe / depth_anything_3 — Dockerfile (vendored, --no-build-isolation -e)
+# =============================================================================
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17
+slowapi==0.1.9
+
+# ── Health / GPU monitoring ──────────────────────────────────────────────────
+nvidia-ml-py
+pydantic>=2.0.0
