@@ -30,6 +30,10 @@ import argparse
 import gc
 import json
 import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lyra_2._src.inference._runner_types import CustomTrajParams
 
 import cv2
 import numpy as np
@@ -203,8 +207,7 @@ def _apply_dmd_defaults(args):
     )
 
 
-if __name__ == "__main__":
-    args = parse_arguments()
+def _execute(args) -> dict:
     _apply_dmd_defaults(args)
 
     if args.debug:
@@ -549,3 +552,23 @@ if __name__ == "__main__":
             pass
 
     log.info("Done.", rank0_only=True)
+
+    return {
+        "output_dir": str(args.output_path),
+        "video_path": str(video_path),
+    }
+
+
+def run_custom_traj(params: "CustomTrajParams") -> dict:
+    from argparse import Namespace
+    args = Namespace(**params.__dict__)
+    return _execute(args)
+
+
+def main() -> None:
+    args = parse_arguments()
+    _execute(args)
+
+
+if __name__ == "__main__":
+    main()

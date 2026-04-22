@@ -29,7 +29,10 @@ from __future__ import annotations
 import argparse
 import gc
 import os
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List, Tuple
+
+if TYPE_CHECKING:
+    from lyra_2._src.inference._runner_types import ZoomGSParams
 
 import cv2
 import numpy as np
@@ -486,8 +489,7 @@ def _apply_dmd_defaults(args):
     )
 
 
-if __name__ == "__main__":
-    args = parse_arguments()
+def _execute(args) -> dict:
     _apply_dmd_defaults(args)
 
     process_group = None
@@ -809,3 +811,25 @@ if __name__ == "__main__":
             pass
 
     log.info("Done.", rank0_only=True)
+
+    return {
+        "output_dir": str(per_image_dir),
+        "video_path": str(combined_video_path),
+        "zoom_in_path": str(os.path.join(per_image_dir, "zoom_in.mp4")),
+        "zoom_out_path": str(os.path.join(per_image_dir, "zoom_out.mp4")),
+    }
+
+
+def run_zoomgs(params: "ZoomGSParams") -> dict:
+    from argparse import Namespace
+    args = Namespace(**params.__dict__)
+    return _execute(args)
+
+
+def main() -> None:
+    args = parse_arguments()
+    _execute(args)
+
+
+if __name__ == "__main__":
+    main()

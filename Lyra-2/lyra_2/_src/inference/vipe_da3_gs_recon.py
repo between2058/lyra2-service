@@ -21,7 +21,10 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
+
+if TYPE_CHECKING:
+    from lyra_2._src.inference._runner_types import GSReconParams
 
 import cv2
 import numpy as np
@@ -603,9 +606,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-
+def _execute(args) -> dict:
     input_video = Path(args.input_video_path).expanduser().resolve()
     if not input_video.is_file():
         raise FileNotFoundError(f"Input video not found: {input_video}")
@@ -616,7 +617,11 @@ def main() -> None:
     done_marker = output_dir / ".done"
     if done_marker.is_file() and not args.force:
         print(f"[vipe_da3_gs] Skipping {input_video.name}: {done_marker} exists. Use --force to re-run.")
-        return
+        return {
+            "output_dir": str(output_dir),
+            "ply_path": str(output_dir / "reconstructed_scene.ply"),
+            "trajectory_video_path": str(output_dir / "gs_trajectory.mp4"),
+        }
 
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     print(f"[vipe_da3_gs] Input video: {input_video}")
@@ -909,6 +914,23 @@ def main() -> None:
 
     done_marker.write_text("done\n")
     print("[vipe_da3_gs] Done.")
+
+    return {
+        "output_dir": str(output_dir),
+        "ply_path": str(output_dir / "reconstructed_scene.ply"),
+        "trajectory_video_path": str(output_dir / "gs_trajectory.mp4"),
+    }
+
+
+def run_gs_recon(params: "GSReconParams") -> dict:
+    from argparse import Namespace
+    args = Namespace(**params.__dict__)
+    return _execute(args)
+
+
+def main() -> None:
+    args = parse_args()
+    _execute(args)
 
 
 if __name__ == "__main__":
