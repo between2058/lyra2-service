@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+.venv/
+venv/
+
+# Lyra-2 large outputs / weights
+Lyra-2/checkpoints/
+Lyra-2/outputs/
+
+# Service runtime
+outputs/
+logs/
+hf_cache/
+
+# Local secrets
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
