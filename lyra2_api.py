@@ -29,7 +29,7 @@ try:
 except (ImportError, ModuleNotFoundError):
     torch = None
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
@@ -459,27 +459,33 @@ def _set_force_restart(reason: str) -> None:
 
 
 # =============================================================================
-# Model Loading (STUBS — Task 4 wires the real loaders)
+# Model Loading (sentinel markers — warm-load deferred to first inference)
 # =============================================================================
 
-def ensure_video_pipeline_loaded():
-    """Lazy-load the Lyra-2 video diffusion pipeline (zoom-out / custom traj).
+def ensure_video_pipeline_loaded() -> None:
+    """Mark the video pipeline as ready.
 
-    Stub: real loader body is added in Task 4 once the pipeline import paths
-    are finalised.  Until then, calling this raises NotImplementedError so any
-    accidental job submission fails loudly rather than silently no-oping.
+    The actual model load happens lazily inside run_zoomgs() / run_custom_traj() on
+    first use. This sentinel sets a module flag so /health correctly reports
+    model_loaded=True. Warm-load (separating load() from infer()) is a future
+    optimisation that requires a deeper Lyra-2 refactor.
     """
-    raise NotImplementedError("model loader not yet wired — Task 4 will fill this in")
+    global _video_pipeline
+    if _video_pipeline is None:
+        app_logger.info("Video pipeline marker set (warm-load deferred to first inference call)")
+        _video_pipeline = "ready"  # sentinel
 
 
-def ensure_gs_pipeline_loaded():
-    """Lazy-load the VIPE + DA3 GS reconstruction pipeline.
+def ensure_gs_pipeline_loaded() -> None:
+    """Mark the GS reconstruction pipeline as ready.
 
-    Stub: real loader body is added in Task 4 once the pipeline import paths
-    are finalised.  Until then, calling this raises NotImplementedError so any
-    accidental job submission fails loudly rather than silently no-oping.
+    Same lazy-marker pattern as ensure_video_pipeline_loaded() — the heavy load
+    happens inside run_gs_recon() on first call.
     """
-    raise NotImplementedError("model loader not yet wired — Task 4 will fill this in")
+    global _gs_pipeline
+    if _gs_pipeline is None:
+        app_logger.info("GS pipeline marker set (warm-load deferred to first inference call)")
+        _gs_pipeline = "ready"  # sentinel
 
 
 # =============================================================================
@@ -561,3 +567,251 @@ async def health_check():
         )
 
     return {"status": "ok", **body}
+
+
+# =============================================================================
+# Job submission endpoints
+# =============================================================================
+
+@app.post("/jobs/image-to-video")
+async def image_to_video(
+    mode: str = Form(...),
+    image: UploadFile = File(...),
+    caption: Optional[str] = Form(None),
+    trajectory: Optional[UploadFile] = File(None),
+    captions_json: Optional[UploadFile] = File(None),
+    num_frames_zoom_in: int = Form(81),
+    num_frames_zoom_out: int = Form(241),
+    num_frames: int = Form(481),
+    zoom_in_strength: float = Form(0.5),
+    zoom_out_strength: float = Form(1.5),
+    pose_scale: float = Form(1.0),
+    use_dmd: bool = Form(False),
+    seed: int = Form(1),
+):
+    """Generate a video from an image using Lyra-2.
+
+    Two modes:
+      - "preset": use built-in zoom-in / zoom-out trajectory + caption text
+      - "custom": user-supplied trajectory.npz + captions.json
+    """
+    if mode not in ("preset", "custom"):
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "BAD_MODE", "message": "mode must be 'preset' or 'custom'"},
+        )
+
+    request_id = str(uuid.uuid4())
+    req_dir = os.path.join(OUTPUT_DIR, request_id)
+    os.makedirs(req_dir, exist_ok=True)
+
+    image_path = os.path.join(req_dir, "input.png")
+    with open(image_path, "wb") as f:
+        shutil.copyfileobj(image.file, f)
+
+    if mode == "preset":
+        if ZoomGSParams is None or run_zoomgs is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error_code": "PIPELINE_UNAVAILABLE",
+                    "message": "Lyra-2 inference modules not loaded — check container env",
+                },
+            )
+        params = ZoomGSParams(
+            input_image_path=image_path,
+            prompt=caption or "",
+            output_path=req_dir,
+            num_frames_zoom_in=num_frames_zoom_in,
+            num_frames_zoom_out=num_frames_zoom_out,
+            zoom_in_strength=zoom_in_strength,
+            zoom_out_strength=zoom_out_strength,
+            use_dmd=use_dmd,
+            seed=seed,
+        )
+
+        def sync_fn():
+            ensure_video_pipeline_loaded()
+            return run_zoomgs(params)
+    else:  # mode == "custom"
+        if CustomTrajParams is None or run_custom_traj is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error_code": "PIPELINE_UNAVAILABLE",
+                    "message": "Lyra-2 inference modules not loaded — check container env",
+                },
+            )
+        if trajectory is None or captions_json is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "MISSING_FIELDS",
+                    "message": "mode=custom requires trajectory and captions_json files",
+                },
+            )
+        traj_path = os.path.join(req_dir, "trajectory.npz")
+        cap_path = os.path.join(req_dir, "captions.json")
+        with open(traj_path, "wb") as f:
+            shutil.copyfileobj(trajectory.file, f)
+        with open(cap_path, "wb") as f:
+            shutil.copyfileobj(captions_json.file, f)
+        params = CustomTrajParams(
+            input_image_path=image_path,
+            trajectory_path=traj_path,
+            captions_path=cap_path,
+            output_path=req_dir,
+            num_frames=num_frames,
+            use_dmd=use_dmd,
+            pose_scale=pose_scale,
+            seed=seed,
+        )
+
+        def sync_fn():
+            ensure_video_pipeline_loaded()
+            return run_custom_traj(params)
+
+    queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    return {"job_id": request_id, "status": "queued", "queue_position": queue_pos}
+
+
+@app.post("/jobs/video-to-gs")
+async def video_to_gs(
+    video: UploadFile = File(...),
+):
+    """Reconstruct a 3DGS scene from an input video using VIPE + DA3."""
+    if GSReconParams is None or run_gs_recon is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "PIPELINE_UNAVAILABLE",
+                "message": "Lyra-2 inference modules not loaded — check container env",
+            },
+        )
+
+    request_id = str(uuid.uuid4())
+    req_dir = os.path.join(OUTPUT_DIR, request_id)
+    os.makedirs(req_dir, exist_ok=True)
+
+    video_path = os.path.join(req_dir, "input.mp4")
+    with open(video_path, "wb") as f:
+        shutil.copyfileobj(video.file, f)
+
+    params = GSReconParams(input_video_path=video_path, output_dir=req_dir)
+
+    def sync_fn():
+        ensure_gs_pipeline_loaded()
+        return run_gs_recon(params)
+
+    queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    return {"job_id": request_id, "status": "queued", "queue_position": queue_pos}
+
+
+@app.post("/jobs/image-to-gs")
+async def image_to_gs(
+    mode: str = Form(...),
+    image: UploadFile = File(...),
+    caption: Optional[str] = Form(None),
+    trajectory: Optional[UploadFile] = File(None),
+    captions_json: Optional[UploadFile] = File(None),
+    num_frames_zoom_in: int = Form(81),
+    num_frames_zoom_out: int = Form(241),
+    num_frames: int = Form(481),
+    zoom_in_strength: float = Form(0.5),
+    zoom_out_strength: float = Form(1.5),
+    pose_scale: float = Form(1.0),
+    use_dmd: bool = Form(False),
+    seed: int = Form(1),
+):
+    """End-to-end: generate a video from an image, then reconstruct a 3DGS scene.
+
+    Chains run_zoomgs() / run_custom_traj() (Step 1) into run_gs_recon() (Step 2)
+    inside a single sync closure so they run back-to-back on the GPU worker.
+    """
+    if mode not in ("preset", "custom"):
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "BAD_MODE", "message": "mode must be 'preset' or 'custom'"},
+        )
+
+    request_id = str(uuid.uuid4())
+    req_dir = os.path.join(OUTPUT_DIR, request_id)
+    os.makedirs(req_dir, exist_ok=True)
+
+    image_path = os.path.join(req_dir, "input.png")
+    with open(image_path, "wb") as f:
+        shutil.copyfileobj(image.file, f)
+
+    params_zoom = None
+    params_custom = None
+
+    if mode == "preset":
+        if ZoomGSParams is None or run_zoomgs is None or GSReconParams is None or run_gs_recon is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error_code": "PIPELINE_UNAVAILABLE",
+                    "message": "Lyra-2 inference modules not loaded — check container env",
+                },
+            )
+        params_zoom = ZoomGSParams(
+            input_image_path=image_path,
+            prompt=caption or "",
+            output_path=req_dir,
+            num_frames_zoom_in=num_frames_zoom_in,
+            num_frames_zoom_out=num_frames_zoom_out,
+            zoom_in_strength=zoom_in_strength,
+            zoom_out_strength=zoom_out_strength,
+            use_dmd=use_dmd,
+            seed=seed,
+        )
+    else:  # mode == "custom"
+        if CustomTrajParams is None or run_custom_traj is None or GSReconParams is None or run_gs_recon is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error_code": "PIPELINE_UNAVAILABLE",
+                    "message": "Lyra-2 inference modules not loaded — check container env",
+                },
+            )
+        if trajectory is None or captions_json is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "MISSING_FIELDS",
+                    "message": "mode=custom requires trajectory and captions_json files",
+                },
+            )
+        traj_path = os.path.join(req_dir, "trajectory.npz")
+        cap_path = os.path.join(req_dir, "captions.json")
+        with open(traj_path, "wb") as f:
+            shutil.copyfileobj(trajectory.file, f)
+        with open(cap_path, "wb") as f:
+            shutil.copyfileobj(captions_json.file, f)
+        params_custom = CustomTrajParams(
+            input_image_path=image_path,
+            trajectory_path=traj_path,
+            captions_path=cap_path,
+            output_path=req_dir,
+            num_frames=num_frames,
+            use_dmd=use_dmd,
+            pose_scale=pose_scale,
+            seed=seed,
+        )
+
+    def sync_fn():
+        ensure_video_pipeline_loaded()
+        if mode == "preset":
+            step1 = run_zoomgs(params_zoom)
+        else:
+            step1 = run_custom_traj(params_custom)
+        ensure_gs_pipeline_loaded()
+        step2_params = GSReconParams(
+            input_video_path=step1["video_path"],
+            output_dir=req_dir,
+        )
+        step2 = run_gs_recon(step2_params)
+        return {**step1, **step2}
+
+    queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    return {"job_id": request_id, "status": "queued", "queue_position": queue_pos}
