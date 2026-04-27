@@ -671,7 +671,11 @@ async def image_to_video(
             ensure_video_pipeline_loaded()
             return run_custom_traj(params)
 
-    queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    try:
+        queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    except HTTPException:
+        shutil.rmtree(req_dir, ignore_errors=True)
+        raise
     return {"job_id": request_id, "status": "queued", "queue_position": queue_pos}
 
 
@@ -703,7 +707,11 @@ async def video_to_gs(
         ensure_gs_pipeline_loaded()
         return run_gs_recon(params)
 
-    queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    try:
+        queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    except HTTPException:
+        shutil.rmtree(req_dir, ignore_errors=True)
+        raise
     return {"job_id": request_id, "status": "queued", "queue_position": queue_pos}
 
 
@@ -813,5 +821,9 @@ async def image_to_gs(
         step2 = run_gs_recon(step2_params)
         return {**step1, **step2}
 
-    queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    try:
+        queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
+    except HTTPException:
+        shutil.rmtree(req_dir, ignore_errors=True)
+        raise
     return {"job_id": request_id, "status": "queued", "queue_position": queue_pos}
