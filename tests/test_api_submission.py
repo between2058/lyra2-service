@@ -78,3 +78,31 @@ def test_image_to_gs_preset(client):
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "queued"
+
+
+def test_poll_unknown_job(client):
+    r = client.get("/jobs/does-not-exist")
+    assert r.status_code == 404
+    assert r.json()["detail"]["error_code"] == "JOB_NOT_FOUND"
+
+
+def test_cancel_unknown_job(client):
+    r = client.delete("/jobs/does-not-exist")
+    assert r.status_code == 404
+
+
+def test_full_lifecycle(client):
+    """Submit, poll until completed (mocked GPU returns instantly)."""
+    import time
+    r = client.post(
+        "/jobs/video-to-gs",
+        files={"video": ("test.mp4", io.BytesIO(b"\x00" * 1024), "video/mp4")},
+    )
+    job_id = r.json()["job_id"]
+    for _ in range(30):
+        s = client.get(f"/jobs/{job_id}")
+        if s.json()["status"] == "completed":
+            break
+        time.sleep(0.1)
+    assert s.json()["status"] == "completed"
+    assert s.json()["result"]["ply_path"] == "/tmp/z.ply"

@@ -494,6 +494,13 @@ def ensure_gs_pipeline_loaded() -> None:
 
 @app.on_event("startup")
 async def _start_gpu_worker():
+    global _infer_queue, _gpu_semaphore
+    # Re-create the queue and semaphore bound to the *current* event loop.
+    # This is necessary when the server is started multiple times in the same
+    # process (e.g. during testing), because asyncio primitives are bound to the
+    # loop that created them and cannot be reused across loops.
+    _infer_queue = asyncio.Queue(maxsize=QUEUE_MAX_SIZE)
+    _gpu_semaphore = asyncio.Semaphore(1)
     asyncio.create_task(_gpu_worker_loop())
     asyncio.create_task(_cleanup_loop())
     app_logger.info(f"GPU worker started (queue maxsize={QUEUE_MAX_SIZE})")
@@ -827,3 +834,122 @@ async def image_to_gs(
         shutil.rmtree(req_dir, ignore_errors=True)
         raise
     return {"job_id": request_id, "status": "queued", "queue_position": queue_pos}
+
+
+# =============================================================================
+# Job lifecycle endpoints: status, cancel, download
+# =============================================================================
+
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """Poll for job status. Returns 404 if job_id is unknown or has expired."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "JOB_NOT_FOUND", "message": f"Job {job_id} not found or expired"},
+        )
+
+    queue_position = None
+    if job.status == "queued":
+        for i, item in enumerate(list(_infer_queue._queue)):
+            if item[0] == job_id:
+                queue_position = i + 1
+                break
+
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "queue_position": queue_position,
+        "created_at": job.created_at.isoformat(),
+        "result": job.result,
+        "error": job.error,
+    }
+
+
+_CANCEL_ERROR_RESPONSES = {
+    404: {"description": "JOB_NOT_FOUND — job_id is unknown or has already expired"},
+    409: {"description": "JOB_NOT_CANCELLABLE — job is already processing, completed, or failed"},
+}
+
+
+@app.delete("/jobs/{job_id}", responses=_CANCEL_ERROR_RESPONSES)
+async def cancel_job(job_id: str):
+    """Cancel a queued job before it enters the GPU worker.
+
+    Returns 404 if the job is unknown or expired.
+    Returns 409 if the job is already processing / completed / failed.
+    """
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "JOB_NOT_FOUND", "message": f"Job {job_id} not found or expired"},
+        )
+    if job.status != "queued":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "JOB_NOT_CANCELLABLE",
+                "message": f"Job is in '{job.status}' state and cannot be cancelled",
+            },
+        )
+    _cancelled_jobs.add(job_id)
+    job.status = "failed"
+    job.error = {"error_code": "CANCELLED", "message": "Job was cancelled by user"}
+    if job.output_dir:
+        shutil.rmtree(job.output_dir, ignore_errors=True)
+        job.output_dir = None
+    app_logger.info(f"[Cancel] job_id={job_id} cancelled by user request")
+    return {"job_id": job_id, "status": "cancelled"}
+
+
+@app.get("/download/{request_id}/{file_name}")
+async def download_file(request: Request, request_id: str, file_name: str):
+    """Download an output file from a completed job.
+
+    Returns 400 if file_name contains path traversal characters or has a
+    disallowed extension.  Returns 404 if request_id is unknown or the file
+    does not exist on disk.
+    """
+    # Path traversal guard — reject any file_name containing directory separators
+    # or a leading dot that could escape the job output directory.
+    safe_name = os.path.basename(file_name)
+    if safe_name != file_name or ".." in file_name or file_name.startswith("/"):
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "INVALID_FILE_NAME", "message": "Invalid file name"},
+        )
+
+    # Extension whitelist
+    if not file_name.endswith((".mp4", ".ply", ".json", ".png")):
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "DISALLOWED_EXTENSION", "message": "File type not allowed"},
+        )
+
+    # Job must be known
+    if request_id not in _jobs:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "JOB_NOT_FOUND", "message": f"Job {request_id} not found or expired"},
+        )
+
+    file_path = os.path.join(OUTPUT_DIR, request_id, file_name)
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "FILE_NOT_FOUND", "message": "File not found"},
+        )
+
+    media_type = "application/octet-stream"
+    if file_name.endswith(".mp4"):
+        media_type = "video/mp4"
+    elif file_name.endswith(".ply"):
+        media_type = "application/octet-stream"
+    elif file_name.endswith(".json"):
+        media_type = "application/json"
+    elif file_name.endswith(".png"):
+        media_type = "image/png"
+
+    return FileResponse(file_path, media_type=media_type, filename=file_name)
