@@ -106,3 +106,15 @@ def test_full_lifecycle(client):
         time.sleep(0.1)
     assert s.json()["status"] == "completed"
     assert s.json()["result"]["ply_path"] == "/tmp/z.ply"
+
+
+def test_rate_limit_engages(client):
+    """11th POST in a minute should 429."""
+    last = None
+    for _ in range(12):
+        last = client.post(
+            "/jobs/image-to-video",
+            data={"mode": "preset", "caption": "x"},
+            files={"image": ("test.png", io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100), "image/png")},
+        )
+    assert last.status_code == 429

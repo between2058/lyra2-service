@@ -581,7 +581,9 @@ async def health_check():
 # =============================================================================
 
 @app.post("/jobs/image-to-video")
+@_limiter.limit("10/minute")
 async def image_to_video(
+    request: Request,
     mode: str = Form(...),
     image: UploadFile = File(...),
     caption: Optional[str] = Form(None),
@@ -687,7 +689,9 @@ async def image_to_video(
 
 
 @app.post("/jobs/video-to-gs")
+@_limiter.limit("10/minute")
 async def video_to_gs(
+    request: Request,
     video: UploadFile = File(...),
 ):
     """Reconstruct a 3DGS scene from an input video using VIPE + DA3."""
@@ -723,7 +727,9 @@ async def video_to_gs(
 
 
 @app.post("/jobs/image-to-gs")
+@_limiter.limit("10/minute")
 async def image_to_gs(
+    request: Request,
     mode: str = Form(...),
     image: UploadFile = File(...),
     caption: Optional[str] = Form(None),
@@ -935,7 +941,19 @@ async def download_file(request: Request, request_id: str, file_name: str):
             detail={"error_code": "JOB_NOT_FOUND", "message": f"Job {request_id} not found or expired"},
         )
 
-    file_path = os.path.join(OUTPUT_DIR, request_id, file_name)
+    file_path = os.path.join(OUTPUT_DIR, request_id, safe_name)
+
+    # Belt-and-braces: ensure resolved path stays under OUTPUT_DIR even if a
+    # symlink inside the job directory points elsewhere.  This is a defence-in-
+    # depth check on top of the basename / ".." / leading-slash rejections above.
+    real_file = os.path.realpath(file_path)
+    real_root = os.path.realpath(OUTPUT_DIR)
+    if not (real_file == real_root or real_file.startswith(real_root + os.sep)):
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "PATH_TRAVERSAL", "message": "Resolved path escapes OUTPUT_DIR"},
+        )
+
     if not os.path.exists(file_path):
         raise HTTPException(
             status_code=404,
