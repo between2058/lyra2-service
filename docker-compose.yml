@@ -1,0 +1,106 @@
+version: "3.8"
+
+# =============================================================================
+# Lyra-2 Service — standalone orchestration
+#
+# Quick start:
+#   cp .env.example .env
+#   $EDITOR .env
+#   docker compose up -d
+#
+# Endpoints (via nginx):
+#   POST http://localhost:52071/jobs/image-to-gs
+#   POST http://localhost:52071/jobs/image-to-video
+#   POST http://localhost:52071/jobs/video-to-gs
+#   GET  http://localhost:52071/jobs/{id}
+#   GET  http://localhost:52071/health
+#   GET  http://localhost:52071/docs
+#
+# Bypass nginx for debugging: uncomment the lyra2 ports section.
+# =============================================================================
+
+networks:
+  lyra2-net:
+    driver: bridge
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: lyra2-nginx
+    ports:
+      - "${LYRA2_PORT:-52071}:52071"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - lyra2-net
+    depends_on:
+      - lyra2
+    restart: unless-stopped
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: lyra2-autoheal
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=300       # Lyra-2 first-load is slow
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  lyra2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-12.0}"
+        MAX_JOBS: "${MAX_JOBS:-4}"
+        http_proxy: "${HTTP_PROXY:-}"
+        https_proxy: "${HTTPS_PROXY:-}"
+        no_proxy: "localhost,127.0.0.1"
+
+    container_name: lyra2-api
+
+    # Ports are NOT exposed to host — traffic goes through nginx.
+    # Uncomment for direct debug access:
+    # ports:
+    #   - "127.0.0.1:52071:52071"
+
+    volumes:
+      - ${HF_CACHE_HOST_PATH}:/app/hf_cache:rw
+      - ${LYRA2_CHECKPOINTS_PATH:-./Lyra-2/checkpoints}:/app/Lyra-2/checkpoints:ro
+      - ./logs:/app/logs
+      - ./outputs:/app/outputs
+
+    environment:
+      - HF_HOME=/app/hf_cache
+      - TRANSFORMERS_CACHE=/app/hf_cache
+      - HUGGINGFACE_HUB_CACHE=/app/hf_cache
+      - QUEUE_MAX_SIZE=${LYRA2_QUEUE_MAX_SIZE:-3}
+      - NVML_GPU_INDEX=${LYRA2_GPU_ID:-0}
+      - TORCH_VRAM_LEAK_LIMIT_GB=${LYRA2_TORCH_VRAM_LEAK_LIMIT_GB:-80.0}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LYRA2_GPU_ID:-0}"]
+              capabilities: [gpu]
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:52071/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 300s
+
+    labels:
+      autoheal: "true"
+
+    shm_size: "8gb"
+    networks:
+      - lyra2-net
+    restart: unless-stopped

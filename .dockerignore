@@ -1,0 +1,41 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Python build/cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+.venv/
+venv/
+
+# Lyra-2 large outputs / weights (volume-mounted at runtime, not baked into image)
+Lyra-2/checkpoints/
+Lyra-2/outputs/
+
+# Service runtime
+outputs/
+logs/
+hf_cache/
+
+# Local secrets
+.env
+.env.local
+
+# Docs (not needed in image)
+docs/
+README.md
+UPSTREAM.md
+
+# Tests (not needed in image)
+tests/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
