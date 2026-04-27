@@ -68,6 +68,21 @@ except (ImportError, ModuleNotFoundError):
     ZoomGSParams = CustomTrajParams = GSReconParams = None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Working directory anchor
+# ─────────────────────────────────────────────────────────────────────────────
+# Lyra-2 inference scripts (lyra2_zoomgs_inference, lyra2_custom_traj_inference,
+# vipe_da3_gs_recon) use bare relative paths like "checkpoints/model" and
+# "checkpoints/text_encoder/negative_prompt.pt". Inside the container we set
+# WORKDIR=/app but the checkpoints are bind-mounted at /app/Lyra-2/checkpoints,
+# so we must chdir into /app/Lyra-2 before any inference call.
+#
+# Override with LYRA2_ROOT env var if running outside Docker (host tests).
+_LYRA2_ROOT = os.environ.get("LYRA2_ROOT", "/app/Lyra-2")
+if os.path.isdir(_LYRA2_ROOT):
+    os.chdir(_LYRA2_ROOT)
+
+
 # =============================================================================
 # Logging 設定
 # =============================================================================
@@ -458,6 +473,20 @@ def _set_force_restart(reason: str) -> None:
     app_logger.error(f"[ForceRestart] Flagged for autoheal restart: {reason}")
 
 
+def _flatten_step1_outputs(result: dict, req_dir: str) -> dict:
+    """Move Lyra-2's nested videos/<file>.mp4 outputs up to req_dir/<file>.mp4
+    so the /download endpoint (which forbids path separators) can serve them."""
+    flattened = dict(result)
+    for key in ("video_path", "zoom_in_path", "zoom_out_path"):
+        src = result.get(key)
+        if src and os.path.exists(src) and os.path.dirname(src) != req_dir:
+            dst = os.path.join(req_dir, os.path.basename(src))
+            if os.path.realpath(src) != os.path.realpath(dst):
+                shutil.move(src, dst)
+            flattened[key] = dst
+    return flattened
+
+
 # =============================================================================
 # Model Loading (sentinel markers — warm-load deferred to first inference)
 # =============================================================================
@@ -641,7 +670,8 @@ async def image_to_video(
 
         def sync_fn():
             ensure_video_pipeline_loaded()
-            return run_zoomgs(params)
+            result = run_zoomgs(params)
+            return _flatten_step1_outputs(result, req_dir)
     else:  # mode == "custom"
         if CustomTrajParams is None or run_custom_traj is None:
             raise HTTPException(
@@ -678,7 +708,8 @@ async def image_to_video(
 
         def sync_fn():
             ensure_video_pipeline_loaded()
-            return run_custom_traj(params)
+            result = run_custom_traj(params)
+            return _flatten_step1_outputs(result, req_dir)
 
     try:
         queue_pos = await _submit_to_gpu_worker(sync_fn, request_id, req_dir)
@@ -826,6 +857,7 @@ async def image_to_gs(
             step1 = run_zoomgs(params_zoom)
         else:
             step1 = run_custom_traj(params_custom)
+        step1 = _flatten_step1_outputs(step1, req_dir)
         ensure_gs_pipeline_loaded()
         step2_params = GSReconParams(
             input_video_path=step1["video_path"],
