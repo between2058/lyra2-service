@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 import logging
 import logging.handlers
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 # torch may not be installed on the host — guard so the module imports cleanly
 # during host-side syntax checks.  In Docker this always succeeds.
@@ -473,6 +473,19 @@ def _set_force_restart(reason: str) -> None:
     app_logger.error(f"[ForceRestart] Flagged for autoheal restart: {reason}")
 
 
+def _normalize_optional_upload(f) -> Optional[UploadFile]:
+    """Coerce a Form-supplied optional file to None when the client sent no file.
+
+    Swagger UI / curl populate empty file fields with empty strings rather than
+    omitting them, which trips Pydantic v2's UploadFile validator (422 with
+    'Expected UploadFile, received str'). Accept str | UploadFile | None on the
+    handler signature and call this helper to collapse non-files to None.
+    """
+    if f is None or isinstance(f, str):
+        return None
+    return f
+
+
 def _flatten_step1_outputs(result: dict, req_dir: str) -> dict:
     """Move Lyra-2's nested videos/<file>.mp4 outputs up to req_dir/<file>.mp4
     so the /download endpoint (which forbids path separators) can serve them."""
@@ -616,8 +629,8 @@ async def image_to_video(
     mode: str = Form(...),
     image: UploadFile = File(...),
     caption: Optional[str] = Form(None),
-    trajectory: Optional[UploadFile] = File(None),
-    captions_json: Optional[UploadFile] = File(None),
+    trajectory: Optional[Union[UploadFile, str]] = File(None),
+    captions_json: Optional[Union[UploadFile, str]] = File(None),
     num_frames_zoom_in: int = Form(81),
     num_frames_zoom_out: int = Form(241),
     num_frames: int = Form(481),
@@ -638,6 +651,10 @@ async def image_to_video(
             status_code=400,
             detail={"error_code": "BAD_MODE", "message": "mode must be 'preset' or 'custom'"},
         )
+
+    # Swagger UI / curl can send empty strings for unfilled file fields; coerce.
+    trajectory = _normalize_optional_upload(trajectory)
+    captions_json = _normalize_optional_upload(captions_json)
 
     request_id = str(uuid.uuid4())
     req_dir = os.path.join(OUTPUT_DIR, request_id)
@@ -764,8 +781,8 @@ async def image_to_gs(
     mode: str = Form(...),
     image: UploadFile = File(...),
     caption: Optional[str] = Form(None),
-    trajectory: Optional[UploadFile] = File(None),
-    captions_json: Optional[UploadFile] = File(None),
+    trajectory: Optional[Union[UploadFile, str]] = File(None),
+    captions_json: Optional[Union[UploadFile, str]] = File(None),
     num_frames_zoom_in: int = Form(81),
     num_frames_zoom_out: int = Form(241),
     num_frames: int = Form(481),
@@ -785,6 +802,10 @@ async def image_to_gs(
             status_code=400,
             detail={"error_code": "BAD_MODE", "message": "mode must be 'preset' or 'custom'"},
         )
+
+    # Swagger UI / curl can send empty strings for unfilled file fields; coerce.
+    trajectory = _normalize_optional_upload(trajectory)
+    captions_json = _normalize_optional_upload(captions_json)
 
     request_id = str(uuid.uuid4())
     req_dir = os.path.join(OUTPUT_DIR, request_id)
