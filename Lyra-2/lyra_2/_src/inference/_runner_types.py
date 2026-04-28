@@ -21,7 +21,7 @@ class ZoomGSParams:
     prompt: str = ""
     prompt_dir: Optional[str] = None
     prompt_suffix: str = ""
-    experiment: str = "lyra_framepack_spatial"
+    experiment: str = "lyra2"  # Hydra config registered in configs/experiment.py; the argparse default "lyra_framepack_spatial" is stale upstream
     checkpoint_dir: str = "checkpoints/model"
     output_path: str = "inference/lyra2_zoomgs"
     guidance: float = 5.0
@@ -80,7 +80,7 @@ class CustomTrajParams:
     prompt_dir: Optional[str] = None
     captions_path: Optional[str] = None
     prompt_suffix: str = ""
-    experiment: str = "lyra_framepack_spatial"
+    experiment: str = "lyra2"  # Hydra config registered in configs/experiment.py; the argparse default "lyra_framepack_spatial" is stale upstream
     checkpoint_dir: str = "checkpoints/model"
     output_path: str = "inference/lyra2_custom_traj"
     guidance: float = 5.0
