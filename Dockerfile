@@ -82,6 +82,16 @@ RUN SITE=$(python -c "import site; print(site.getsitepackages()[0])") \
 # ── flash-attn — UNPINNED, latest version (Lyra's pin of 2.6.3 has no sm_120 kernel) ──
 RUN MAX_JOBS=${MAX_JOBS} pip install --no-cache-dir --no-build-isolation flash-attn
 
+# ── Build backends for vendored extensions ──────────────────────────────────
+# depth_anything_3 uses hatchling as its build backend (see its pyproject.toml).
+# Lyra-2 requirements.txt lists `hatchling` but we install it with --no-deps
+# (per upstream INSTALL.md), which means hatchling's own runtime deps
+# (pathspec, packaging, pluggy, trove-classifiers, editables) are missing.
+# Combined with --no-build-isolation below, hatchling can't import pathspec at
+# build time. Install the build backends WITH their deps here so the
+# editable installs that follow have everything they need.
+RUN pip install --no-cache-dir --upgrade hatchling hatch-vcs editables
+
 # ── Vendored CUDA extensions ────────────────────────────────────────────────
 COPY Lyra-2/lyra_2/_src/inference/vipe              /app/Lyra-2/lyra_2/_src/inference/vipe
 COPY Lyra-2/lyra_2/_src/inference/depth_anything_3  /app/Lyra-2/lyra_2/_src/inference/depth_anything_3
