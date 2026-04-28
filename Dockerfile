@@ -41,16 +41,16 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # ── System packages ──────────────────────────────────────────────────────────
-# gcc-13 replaces conda's gcc=13.3.0; libeigen3-dev replaces conda's eigen.
+# Note: Lyra-2 INSTALL.md pins conda gcc=13.3.0, but Ubuntu 22.04's default apt
+# only ships gcc-11/12. We keep the build-essential default (gcc-11) — CUDA 12.8
+# supports it as a host compiler and TRELLIS.2 (same Blackwell stack) builds
+# fine with it. libeigen3-dev replaces conda's eigen requirement.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 python3.10-dev python3-pip \
     build-essential ninja-build cmake git wget curl \
-    gcc-13 g++-13 \
     libeigen3-dev \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
     libegl1-mesa-dev libgles2-mesa-dev libgomp1 ffmpeg libjpeg-dev \
- && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
- && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100 \
  && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 \
