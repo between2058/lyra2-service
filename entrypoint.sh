@@ -11,13 +11,20 @@ set -euo pipefail
 
 CKPT_DIR="${LYRA2_CHECKPOINT_DIR:-/app/Lyra-2/checkpoints}"
 DOWNLOAD_TARGET="$(dirname "$CKPT_DIR")"
-MARKER_DIR="$CKPT_DIR/model"
 
-if [[ -d "$MARKER_DIR" ]] && [[ -n "$(ls -A "$MARKER_DIR" 2>/dev/null)" ]]; then
-    echo "[entrypoint] Checkpoints already present at $CKPT_DIR — skipping download."
+# Use a SPECIFIC small file as the "fully downloaded" marker rather than just
+# "is the model dir non-empty". Lyra-2's HF repo contains 6 subdirs (image_encoder,
+# lora, model, recon, text_encoder, vae) and a partial download (e.g. interrupted
+# manual hf-cli) can leave model/ populated while text_encoder/ is still missing,
+# which causes inference to crash with FileNotFoundError on negative_prompt.pt.
+# Pick a small file we know is needed by every inference path.
+MARKER_FILE="$CKPT_DIR/text_encoder/negative_prompt.pt"
+
+if [[ -f "$MARKER_FILE" ]]; then
+    echo "[entrypoint] Checkpoints already complete at $CKPT_DIR (marker: $MARKER_FILE) — skipping download."
 else
-    echo "[entrypoint] Checkpoints missing at $CKPT_DIR."
-    echo "[entrypoint] Downloading nvidia/Lyra-2.0 (~50 GB; first run takes 1-3 hours depending on bandwidth)..."
+    echo "[entrypoint] Checkpoints missing or incomplete at $CKPT_DIR (marker file $MARKER_FILE not found)."
+    echo "[entrypoint] Downloading nvidia/Lyra-2.0 (~50 GB; first run takes 1-3 hours depending on bandwidth; resumable)..."
 
     if [[ -z "${HF_TOKEN:-}" ]]; then
         echo "[entrypoint] WARNING: HF_TOKEN is not set."
