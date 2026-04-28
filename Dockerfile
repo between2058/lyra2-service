@@ -6,7 +6,7 @@
 #
 # Build context: repo root (contains Lyra-2/ + lyra2_api.py + requirements-api.txt)
 # Build:  docker build -t lyra2-api:latest .
-# Run:    docker run --gpus all -p 52071:52071 \
+# Run:    docker run --gpus all -p 52075:52075 \
 #                  -v $HF_CACHE:/app/hf_cache \
 #                  -v $(pwd)/Lyra-2/checkpoints:/app/Lyra-2/checkpoints:ro \
 #                  lyra2-api:latest
@@ -105,21 +105,26 @@ RUN pip install --no-cache-dir --force-reinstall \
 COPY Lyra-2/lyra_2 /app/Lyra-2/lyra_2
 COPY Lyra-2/assets /app/Lyra-2/assets
 COPY lyra2_api.py /app/lyra2_api.py
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 ENV PYTHONPATH=/app/Lyra-2:${PYTHONPATH}
 RUN mkdir -p /app/logs /app/outputs /app/hf_cache
 
-EXPOSE 52071
+EXPOSE 52075
 
+# start_period is 2h to cover first-run checkpoint download (~50 GB).
+# Subsequent restarts skip the download and become healthy within 5 min.
 HEALTHCHECK \
     --interval=30s \
     --timeout=15s \
-    --start-period=300s \
+    --start-period=7200s \
     --retries=5 \
-    CMD curl -f http://localhost:52071/health || exit 1
+    CMD curl -f http://localhost:52075/health || exit 1
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python", "-m", "uvicorn", "lyra2_api:app", \
      "--host", "0.0.0.0", \
-     "--port", "52071", \
+     "--port", "52075", \
      "--workers", "1", \
      "--log-level", "info"]

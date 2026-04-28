@@ -7,12 +7,12 @@
 #   docker compose up -d
 #
 # Endpoints (via nginx):
-#   POST http://localhost:52071/jobs/image-to-gs
-#   POST http://localhost:52071/jobs/image-to-video
-#   POST http://localhost:52071/jobs/video-to-gs
-#   GET  http://localhost:52071/jobs/{id}
-#   GET  http://localhost:52071/health
-#   GET  http://localhost:52071/docs
+#   POST http://localhost:52075/jobs/image-to-gs
+#   POST http://localhost:52075/jobs/image-to-video
+#   POST http://localhost:52075/jobs/video-to-gs
+#   GET  http://localhost:52075/jobs/{id}
+#   GET  http://localhost:52075/health
+#   GET  http://localhost:52075/docs
 #
 # Bypass nginx for debugging: uncomment the lyra2 ports section.
 # =============================================================================
@@ -26,7 +26,7 @@ services:
     image: nginx:1.27-alpine
     container_name: lyra2-nginx
     ports:
-      - "${LYRA2_PORT:-52071}:52071"
+      - "${LYRA2_PORT:-52075}:52075"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
@@ -41,7 +41,7 @@ services:
     environment:
       - AUTOHEAL_CONTAINER_LABEL=autoheal
       - AUTOHEAL_INTERVAL=30
-      - AUTOHEAL_START_PERIOD=300       # Lyra-2 first-load is slow
+      - AUTOHEAL_START_PERIOD=7200      # First start may download ~50 GB of checkpoints
       - AUTOHEAL_DEFAULT_STOP_TIMEOUT=30
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -63,13 +63,16 @@ services:
     # Ports are NOT exposed to host — traffic goes through nginx.
     # Uncomment for direct debug access:
     # ports:
-    #   - "127.0.0.1:52071:52071"
+    #   - "127.0.0.1:52075:52075"
 
     volumes:
       # Default host paths assume the standard /pegaai/model_team/huggingface_cache
       # layout; override in .env if your machine uses a different location.
+      # The checkpoints mount is rw so the entrypoint script can populate it on
+      # first run (huggingface-cli download). After that the application only
+      # reads from it.
       - ${HF_CACHE_HOST_PATH:-/pegaai/model_team/huggingface_cache}:/app/hf_cache:rw
-      - ${LYRA2_CHECKPOINTS_PATH:-/pegaai/model_team/huggingface_cache/Lyra-2.0/checkpoints}:/app/Lyra-2/checkpoints:ro
+      - ${LYRA2_CHECKPOINTS_PATH:-/pegaai/model_team/huggingface_cache/Lyra-2.0/checkpoints}:/app/Lyra-2/checkpoints:rw
       - ./logs:/app/logs
       - ./outputs:/app/outputs
 
@@ -77,6 +80,9 @@ services:
       - HF_HOME=/app/hf_cache
       - TRANSFORMERS_CACHE=/app/hf_cache
       - HUGGINGFACE_HUB_CACHE=/app/hf_cache
+      # nvidia/Lyra-2.0 is a gated HF repo; this token (set in .env) authorises
+      # the auto-download performed by entrypoint.sh on first container start.
+      - HF_TOKEN=${HF_TOKEN:-}
       - QUEUE_MAX_SIZE=${LYRA2_QUEUE_MAX_SIZE:-3}
       - NVML_GPU_INDEX=${LYRA2_GPU_ID:-0}
       - TORCH_VRAM_LEAK_LIMIT_GB=${LYRA2_TORCH_VRAM_LEAK_LIMIT_GB:-80.0}
@@ -91,7 +97,7 @@ services:
               capabilities: [gpu]
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:52071/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:52075/health || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 5

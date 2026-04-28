@@ -16,30 +16,44 @@ Submit a job → get `job_id` → poll `GET /jobs/{job_id}` → download via `GE
 
 ## Quickstart
 
-Defaults assume the standard `/pegaai/model_team/huggingface_cache` layout. On a
-machine with that path, no `.env` editing is required — `docker compose up -d`
-just works after the one-time checkpoint download.
+Defaults assume the standard `/pegaai/model_team/huggingface_cache` layout, so
+on a machine with that path the only file you need to touch is `.env` (for
+your HuggingFace token).
 
 ```bash
-# 1. Download checkpoints (one-time, ~50 GB) into the shared HF cache
+# 1. Get an HF token (read access) at https://huggingface.co/settings/tokens
+#    AND accept the gated-model license at https://huggingface.co/nvidia/Lyra-2.0
+cp .env.example .env
+$EDITOR .env       # paste HF_TOKEN=hf_xxx; override paths/GPU/port if needed
+
+# 2. Build + run — first start auto-downloads checkpoints (~50 GB, 1-3 hours).
+docker compose up -d --build
+docker compose logs -f lyra2     # watch download progress
+
+# 3. Verify
+curl http://localhost:52075/health
+```
+
+The container's entrypoint (`entrypoint.sh`) checks `LYRA2_CHECKPOINTS_PATH/model/`
+on every start. If empty, it runs `huggingface-cli download nvidia/Lyra-2.0
+--include "checkpoints/*"` into the bind-mounted host directory. If already
+populated, it skips download and starts uvicorn immediately.
+
+### Optional: pre-download to skip the first-start wait
+
+If you'd rather not block container start for hours, populate the host
+directory before `docker compose up`:
+
+```bash
 mkdir -p /pegaai/model_team/huggingface_cache/Lyra-2.0
 cd /pegaai/model_team/huggingface_cache/Lyra-2.0
 pip install huggingface_hub
+huggingface-cli login                              # or export HF_TOKEN
 huggingface-cli download nvidia/Lyra-2.0 --include "checkpoints/*" --local-dir .
-
-# 2. Build + run (no .env needed if using the default paths)
-cd <wherever-you-cloned-this-repo>
-docker compose up -d --build
-curl http://localhost:52071/health
 ```
 
-If your machine uses different paths, copy and edit the env file:
-
-```bash
-cp .env.example .env
-$EDITOR .env   # override HF_CACHE_HOST_PATH / LYRA2_CHECKPOINTS_PATH / GPU id
-docker compose up -d --build
-```
+After this, the entrypoint's existence check passes and download is skipped
+(no `HF_TOKEN` needed in `.env` either).
 
 ## Integration with phidias-model
 
