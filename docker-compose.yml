@@ -66,8 +66,10 @@ services:
     #   - "127.0.0.1:52071:52071"
 
     volumes:
-      - ${HF_CACHE_HOST_PATH:?HF_CACHE_HOST_PATH must be set in .env (see .env.example)}:/app/hf_cache:rw
-      - ${LYRA2_CHECKPOINTS_PATH:-./Lyra-2/checkpoints}:/app/Lyra-2/checkpoints:ro
+      # Default host paths assume the standard /pegaai/model_team/huggingface_cache
+      # layout; override in .env if your machine uses a different location.
+      - ${HF_CACHE_HOST_PATH:-/pegaai/model_team/huggingface_cache}:/app/hf_cache:rw
+      - ${LYRA2_CHECKPOINTS_PATH:-/pegaai/model_team/huggingface_cache/Lyra-2.0/checkpoints}:/app/Lyra-2/checkpoints:ro
       - ./logs:/app/logs
       - ./outputs:/app/outputs
 

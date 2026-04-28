@@ -16,20 +16,29 @@ Submit a job → get `job_id` → poll `GET /jobs/{job_id}` → download via `GE
 
 ## Quickstart
 
+Defaults assume the standard `/pegaai/model_team/huggingface_cache` layout. On a
+machine with that path, no `.env` editing is required — `docker compose up -d`
+just works after the one-time checkpoint download.
+
 ```bash
-# 1. Download checkpoints (one-time, ~50 GB)
-cd Lyra-2
+# 1. Download checkpoints (one-time, ~50 GB) into the shared HF cache
+mkdir -p /pegaai/model_team/huggingface_cache/Lyra-2.0
+cd /pegaai/model_team/huggingface_cache/Lyra-2.0
 pip install huggingface_hub
 huggingface-cli download nvidia/Lyra-2.0 --include "checkpoints/*" --local-dir .
-cd ..
 
-# 2. Configure
-cp .env.example .env
-$EDITOR .env   # set HF_CACHE_HOST_PATH and any GPU/path overrides
-
-# 3. Build + run
+# 2. Build + run (no .env needed if using the default paths)
+cd <wherever-you-cloned-this-repo>
 docker compose up -d --build
 curl http://localhost:52071/health
+```
+
+If your machine uses different paths, copy and edit the env file:
+
+```bash
+cp .env.example .env
+$EDITOR .env   # override HF_CACHE_HOST_PATH / LYRA2_CHECKPOINTS_PATH / GPU id
+docker compose up -d --build
 ```
 
 ## Integration with phidias-model
