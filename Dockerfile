@@ -100,6 +100,11 @@ RUN USE_SYSTEM_EIGEN=1 MAX_JOBS=${MAX_JOBS} pip install --no-cache-dir --no-buil
 RUN MAX_JOBS=${MAX_JOBS} pip install --no-cache-dir --no-build-isolation \
     -e '/app/Lyra-2/lyra_2/_src/inference/depth_anything_3[gs]'
 
+# vipe's runtime model downloads (DROID-SLAM, track-anything) call
+# gdown.download(..., fuzzy=True, ...). The `fuzzy` kwarg was added in gdown 4.6.
+# Some transitive dep pins an older gdown, so explicitly upgrade.
+RUN pip install --no-cache-dir --upgrade "gdown>=4.6.0"
+
 # ── API deps ─────────────────────────────────────────────────────────────────
 COPY requirements-api.txt /tmp/lyra2-api-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/lyra2-api-requirements.txt
